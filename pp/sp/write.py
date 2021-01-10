@@ -6,6 +6,8 @@ from collections import namedtuple
 from pathlib import PosixPath
 from typing import Any, Dict, List, Tuple, Union
 
+import gdspy
+import omegaconf
 import numpy as np
 import yaml
 from omegaconf import OmegaConf
@@ -13,7 +15,7 @@ from omegaconf import OmegaConf
 import pp
 from pp.component import Component
 from pp.config import __version__
-from pp.layers import layer2material, layer2nm
+from pp.layers import layer2material, layer2nm, layer2swa
 from pp.sp.get_sparameters_path import get_sparameters_path
 
 run_false_warning = """
@@ -39,6 +41,7 @@ materials = {
 
 default_simulation_settings = dict(
     layer2nm=layer2nm,
+    layer2swa=layer2swa,
     layer2material=layer2material,
     remove_layers=[pp.LAYER.WGCLAD],
     background_material="sio2",
@@ -60,6 +63,9 @@ def clean_dict(
     """Returns same dict after converting tuple keys into list of strings."""
     d["layer2nm"] = [
         f"{k[0]}_{k[1]}_{v}" for k, v in d.get("layer2nm", {}).items() if k in layers
+    ]
+    d["layer2swa"] = [
+        f"{k[0]}_{k[1]}_{v}" for k, v in d.get("layer2swa", {}).items() if k in layers
     ]
     d["layer2material"] = [
         f"{k[0]}_{k[1]}_{v}"
@@ -87,6 +93,7 @@ def write(
         overwrite: run even if simulation results already exists
         dirpath: where to store the simulations
         layer2nm: dict of GDSlayer to thickness (nm) {(1, 0): 220}
+        layer2swa: dict of {(1, 0): 90.0} - sidewall angles for GDS layers
         layer2material: dict of {(1, 0): "si"}
         remove_layers: list of tuples (layers to remove)
         background_material: for the background
@@ -233,10 +240,32 @@ def write(
             raise ValueError(f"{material} not in {list(materials.keys())}")
         material = materials[material]
 
+        # merge polygons (necessary before extrusion with swa != 90 degrees)
+        lib = gdspy.GdsLibrary(infile=gdspath)
+        for cell in lib.top_level():
+            _cell = gdspy.Cell(cell.name, exclude_from_current=True)
+            _cell.add(
+                gdspy.boolean(
+                    cell,
+                    None,
+                    "or",
+                    layer=layer[0],
+                    datatype=layer[1],
+                    max_points=1000000,
+                )
+            )
+            lib.add(_cell, overwrite_duplicate=True)
+        lib.write_gds(gdspath)
+
         s.gdsimport(str(gdspath), c.name, f"{layer[0]}:{layer[1]}")
         silicon = f"GDS_LAYER_{layer[0]}:{layer[1]}"
         s.setnamed(silicon, "z span", nm * 1e-9)
         s.setnamed(silicon, "material", material)
+        s.setnamed(
+            silicon, "script", "selectall;\nset('material',%material%);"
+        )  # disable part of script for GDS poly group
+
+        _extrude_gds_polygons(s, silicon, ss.layer2swa.get(layer, 90.0))
 
     for i, port in enumerate(ports.values()):
         s.addport()
@@ -312,8 +341,57 @@ def write(
         results.update(rm)
 
         filepath_json.write_text(json.dumps(results))
-        filepath_sim_settings.write_text(yaml.dump(sim_settings))
+        filepath_sim_settings.write_text(yaml.dump(_omegaconf2dict(sim_settings)))
         return results
+
+
+def _omegaconf2dict(conf):
+    if isinstance(conf, (omegaconf.DictConfig, dict)):
+        return {k: _omegaconf2dict(v) for k, v in conf.items()}
+    elif isinstance(conf, (omegaconf.ListConfig, list, tuple)):
+        return [_omegaconf2dict(v) for v in conf]
+    else:
+        return conf
+
+
+def _extrude_gds_polygons(session, name, sidewall_angle=80.0, dz=10e-9):
+    num_polys = int(session.getnamednumber(f"{name}::poly"))
+    for i in range(1, num_polys + 1):
+        session.setnamed(f"{name}::poly", "name", f"poly{i}", 1)
+    for i in range(1, num_polys + 1):
+        session.select(f"{name}::poly{i}")
+        # we could do the following with the lumerical python api,
+        # but it's somehow quite a bit faster like this:
+        # original code from https://support.lumerical.com/hc/en-us/articles/360034382334-Tips-for-adding-sidewall-angles-to-simulation-objects
+        session.eval(
+            f"""
+        dz = {dz};
+        sidewall_angle = {sidewall_angle};
+        V = get("vertices");
+        z1 = get("z min");
+        z2 = get("z max");
+        num_vertices= length(V)/2;
+        num_steps = round((z2-z1)/dz);
+        if(num_steps < 2) {{ num_steps = 2; }}
+        tempVx = pinch(V,2,1);
+        tempVy = pinch(V,2,2);
+        x0 = sum(tempVx)/num_vertices;
+        y0 = sum(tempVy)/num_vertices;
+        r0 = sum( sqrt(((tempVx-x0)^2 + (tempVy-y0)^2)) )/num_vertices;
+        for(j=1:num_steps) {{
+            scale_factor = ( r0 + (j-1/2)*(z2-z1)/num_steps/tan(sidewall_angle*pi/180) )/r0;
+            tempVx = (pinch(V,2,1)-x0)*scale_factor + x0;
+            tempVy = (pinch(V,2,2)-y0)*scale_factor + y0;
+            tempV = V;
+            tempV(1:num_vertices,1) = tempVx;
+            tempV(1:num_vertices,2) = tempVy;
+            if(j > 1) {{ copy(0,0,0); }}
+            set("z min",z2-j*(z2-z1)/num_steps);
+            set("z max",z2-(j-1)*(z2-z1)/num_steps);
+            set("vertices",tempV);
+        }}
+        """
+        )
 
 
 def sample_write_coupler_ring():

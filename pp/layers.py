@@ -103,6 +103,7 @@ ls.add_layer("DEVREC", LAYER.DEVREC[0], 0, "", color="gray", alpha=0.1)
 
 
 layer2nm = {LAYER.WG: 220}
+layer2swa = {LAYER.WG: 90}
 layer2material = {
     LAYER.WG: "si",
     LAYER.SLAB90: "si",
