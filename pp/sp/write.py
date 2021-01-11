@@ -220,6 +220,7 @@ def write(
         simulation_time=5e-12,
         mesh_accuracy=ss.mesh_accuracy,
         use_early_shutoff=True,
+        auto_shutoff_min=1e-4,
     )
 
     for layer, nm in ss.layer2nm.items():
