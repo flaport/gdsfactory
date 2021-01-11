@@ -7,8 +7,8 @@ from pathlib import PosixPath
 from typing import Any, Dict, List, Tuple, Union
 
 import gdspy
-import omegaconf
 import numpy as np
+import omegaconf
 import yaml
 from omegaconf import OmegaConf
 
@@ -155,10 +155,10 @@ def write(
 
     pe = ss.port_extension_um * 1e-6 / 2
     port_locations = np.stack([p.midpoint for p in ports.values()], 0)
-    x_min = port_locations[:,0].min() * 1e-6 - pe
-    x_max = port_locations[:,0].max() * 1e-6 + pe
-    y_min = port_locations[:,1].min() * 1e-6 - pe
-    y_max = port_locations[:,1].max() * 1e-6 + pe
+    x_min = port_locations[:, 0].min() * 1e-6 - pe
+    x_max = port_locations[:, 0].max() * 1e-6 + pe
+    y_min = port_locations[:, 1].min() * 1e-6 - pe
+    y_max = port_locations[:, 1].max() * 1e-6 + pe
 
     z = 0
     z_span = 2 * ss.zmargin + max(ss.layer2nm.values()) * 1e-9
@@ -217,6 +217,7 @@ def write(
         y_max=y_max,
         z=z,
         z_span=z_span,
+        simulation_time=5e-12,
         mesh_accuracy=ss.mesh_accuracy,
         use_early_shutoff=True,
     )
