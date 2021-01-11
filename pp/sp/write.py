@@ -154,20 +154,11 @@ def write(
         print(run_false_warning)
 
     pe = ss.port_extension_um * 1e-6 / 2
-    x_min = c.xmin * 1e-6 + pe
-    x_max = c.xmax * 1e-6 - pe
-
-    y_min = c.ymin * 1e-6 - ss.ymargin
-    y_max = c.ymax * 1e-6 + ss.ymargin
-
-    port_orientations = [p.orientation for p in ports.values()]
-    if 90 in port_orientations and len(ports) > 2:
-        y_max = c.ymax * 1e-6 - pe
-        x_max = c.xmax * 1e-6
-
-    elif 90 in port_orientations:
-        y_max = c.ymax * 1e-6 - pe
-        x_max = c.xmax * 1e-6 + ss.ymargin
+    port_locations = np.stack([p.midpoint for p in ports.values()], 0)
+    x_min = port_locations[:,0].min() * 1e-6 - pe
+    x_max = port_locations[:,0].max() * 1e-6 + pe
+    y_min = port_locations[:,1].min() * 1e-6 - pe
+    y_max = port_locations[:,1].max() * 1e-6 + pe
 
     z = 0
     z_span = 2 * ss.zmargin + max(ss.layer2nm.values()) * 1e-9
@@ -274,29 +265,28 @@ def write(
         s.setnamed(p, "y", port.y * 1e-6)
         s.setnamed(p, "z span", ss.port_height)
 
-        deg = int(port.orientation)
+        deg = int(port.orientation) % 360
         # assert port.orientation in [0, 90, 180, 270], f"{port.orientation} needs to be [0, 90, 180, 270]"
-        if -45 <= deg <= 45:
+        if (0 <= deg < 45) or (270 + 45 <= deg < 360):
             direction = "Backward"
             injection_axis = "x-axis"
             dxp = 0
             dyp = ss.port_width
-        elif 45 < deg < 90 + 45:
+        elif 45 <= deg < 90 + 45:
             direction = "Backward"
             injection_axis = "y-axis"
             dxp = ss.port_width
             dyp = 0
-        elif 90 + 45 < deg < 180 + 45:
+        elif 90 + 45 <= deg < 180 + 45:
             direction = "Forward"
             injection_axis = "x-axis"
             dxp = 0
             dyp = ss.port_width
-        elif 180 + 45 < deg < -45:
+        elif 180 + 45 <= deg < 270 + 45:
             direction = "Forward"
             injection_axis = "y-axis"
             dxp = ss.port_width
             dyp = 0
-
         else:
             raise ValueError(
                 f"port {port.name} with orientation {port.orientation} is not a valid"
@@ -320,7 +310,7 @@ def write(
 
         s.addsweep(3)
         s.setsweep("s-parameter sweep", "Excite all ports", 0)
-        s.setsweep("S sweep", "auto symmetry", True)
+        s.setsweep("s-parameter sweep", "auto symmetry", 1)
         s.runsweep("s-parameter sweep")
 
         # collect results
@@ -355,6 +345,8 @@ def _omegaconf2dict(conf):
 
 
 def _extrude_gds_polygons(session, name, sidewall_angle=80.0, dz=10e-9):
+    if (90.0 - sidewall_angle) < 1e-3:
+        return
     num_polys = int(session.getnamednumber(f"{name}::poly"))
     for i in range(1, num_polys + 1):
         session.setnamed(f"{name}::poly", "name", f"poly{i}", 1)
